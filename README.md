@@ -13,3 +13,8 @@ To run, from the build dir (output file is irrelevant):
 ```
 
 A new file hist.txt will be created
+
+To plot, from the build dir (ROOT has to be installed with python support):
+```
+python3 read.py
+```
