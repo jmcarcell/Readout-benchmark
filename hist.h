@@ -1,3 +1,11 @@
+///////////////////////////////////////////
+//
+// Custom histogram class
+//
+///////////////////////////////////////////
+
+// It only supports one constructor with (steps, low limit, high limit)
+
 #include <vector>
 #include <string>
 
@@ -17,6 +25,5 @@ public:
   int Fill(double x);
 
   void Save(std::string filename);
-
-
+  void Save(std::ofstream &filehandle);
 };

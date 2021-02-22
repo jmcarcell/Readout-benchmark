@@ -1,3 +1,9 @@
+///////////////////////////////////////////
+//
+// Custom histogram class
+//
+///////////////////////////////////////////
+
 #include "hist.h"
 #include <vector>
 #include <string>
@@ -19,12 +25,12 @@ int Hist::FindBin(double x){
   
 int Hist::Fill(double x){
   int bin = FindBin(x);
-  std::cout << bin << std::endl;
-  // Underflow
+  // Underflow, do nothing
   if(bin < 0) return -1;
-  // Overflow
+
+  // Overflow, do nothing
   if(bin >= fSteps) return -1;
-  std::cout << fEntries.size() << std::endl;
+
   fEntries[bin]++;
   fNentries++;
   fSum += x;
@@ -38,4 +44,11 @@ void Hist::Save(std::string filename){
   for (auto x: fEntries)
     file << x << " ";
   file << std::endl;
+}
+
+void Hist::Save(std::ofstream &filehandle){
+  filehandle << fSteps << " " << fLow << " " << fHigh << " " << std::endl;
+  for (auto x: fEntries)
+    filehandle << x << " ";
+  filehandle << std::endl;
 }

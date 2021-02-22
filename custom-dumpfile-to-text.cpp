@@ -12,6 +12,7 @@
 #include "CLI11.hpp"
 
 #include "hist.h"
+#include <chrono>
 
 //======================================================================
 void print_channel_numbers(FILE* f, const dune::FelixFrame* frame)
@@ -42,7 +43,9 @@ void print_channel_numbers(FILE* f, const dune::FelixFrame* frame)
 // channel
 int main(int argc, char** argv)
 {
-    Hist hist = Hist(100, 0, 5000);
+    auto begin_main = std::chrono::steady_clock::now();
+    // Vector with all the histograms
+
     // -----------------------------------------------------------------
     // Parse the command-line arguments
     CLI::App app{"Print dumped hits"};
@@ -74,30 +77,65 @@ int main(int argc, char** argv)
 
     std::cout << nframes << std::endl;
 
-    for(size_t i=0; i<1000; ++i){
-        const dune::FelixFrame* frame=frame_file.frame(i);
-        // Print the header
-        if(i==0){
-            print_channel_numbers(fout, frame);
-        }
-        // Print the ADC value for each of the 256 channels in the frame
-        uint64_t timestamp=frame->timestamp();
-        fprintf(fout, "%#" PRIx64 " ", frame->timestamp());
-        for(int i=0; i<256; ++i){
-            fprintf(fout, "% 6d ", frame->channel(i));
-            // std::cout << frame->channel(i) << " ";
-            hist.Fill(frame->channel(i));
-        }
-        // std::cout << std::endl;
-        fprintf(fout, "\n");
+    std::chrono::duration<double> batch_time(0);
+    std::chrono::duration<double> batch_time_no_save(0);
+    int batches = nframes / 10000;
 
-        // Check that the gap between timestamps is 25 ticks
-        if(prev_timestamp!=0 && (timestamp-prev_timestamp!=25)){
-            std::cerr << "Inter-frame timestamp gap of " << (timestamp-prev_timestamp) << " ticks at ts 0x" << std::hex << timestamp << std::dec << ". index=" << i << std::endl;
-            ++nbad;
+    for(int batch=0; batch<nframes / 10000; ++batch){
+        auto begin = std::chrono::steady_clock::now();
+
+        // Vector with the 256 histograms
+        std::vector<Hist> v;
+        v.reserve(256);
+        for(int i=0; i<256; i++)
+            v.push_back(Hist(100, 0, 5000));
+
+        // File handle where the histos are saved for plotting later
+        std::ofstream file( "hist_" + std::to_string(batch) + ".txt" );
+
+
+
+        for(size_t i=batch * 10000; i<batch * 10001; ++i){
+            const dune::FelixFrame* frame=frame_file.frame(i);
+            // Print the header
+            if(i==0){
+                print_channel_numbers(fout, frame);
+            }
+            // Print the ADC value for each of the 256 channels in the frame
+            uint64_t timestamp=frame->timestamp();
+            // fprintf(fout, "%#" PRIx64 " ", frame->timestamp());
+            for(int j=0; j<256; ++j){
+                // fprintf(fout, "% 6d ", frame->channel(j));
+                // std::cout << frame->channel(i) << " ";
+                v[j].Fill(frame->channel(j));
+            }
+            // std::cout << std::endl;
+            // fprintf(fout, "\n");
+
+            // Check that the gap between timestamps is 25 ticks
+            // if(prev_timestamp!=0 && (timestamp-prev_timestamp!=25)){
+            //     std::cerr << "Inter-frame timestamp gap of " << (timestamp-prev_timestamp) << " ticks at ts 0x" << std::hex << timestamp << std::dec << ". index=" << i << std::endl;
+            //     ++nbad;
+            // }
+            // prev_timestamp=timestamp;
         }
-        prev_timestamp=timestamp;
+        auto t = std::chrono::steady_clock::now();
+        batch_time_no_save += (t-begin);
+        for(int i=0; i<256; i++)
+            v[i].Save(file);
+        auto end = std::chrono::steady_clock::now();
+        batch_time += (end - begin);
+        // std::cout << nbad << " bad of " << nframes << std::endl;
+
+        file.close();
     }
-    std::cout << nbad << " bad of " << nframes << std::endl;
-    hist.Save("hist.txt");
+    auto end_main = std::chrono::steady_clock::now();
+    std::cout << "Total elapsed (sec, wall time): " <<
+      (std::chrono::duration_cast<std::chrono::milliseconds>(end_main-begin_main)).count() / 1000.0
+    << std::endl;
+    std::cout << "Total elapsed (sec, processing batch time without saving): " <<
+      batch_time_no_save.count() << std::endl;
+    std::cout << "Total elapsed (sec, processing batch time with saving): " <<
+      batch_time.count() << std::endl;
+    // << std::endl;
 }
