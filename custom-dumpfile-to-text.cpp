@@ -12,8 +12,94 @@
 #include "CLI11.hpp"
 
 #include "hist.h"
+#include "timeseries.h"
 #include <chrono>
 
+////FFT includes
+//#include <complex>
+//#include <iostream>
+//#include <valarray>
+// 
+//typedef std::complex<double> Complex;
+//typedef std::valarray<Complex> CArray;
+//
+//CArray prepareForFourier(std::vector<double> input)
+//{
+//  std::valarray<Complex> output (input.size());
+//  Complex val;
+//  for (int i = 0; i < input.size(); i++)
+//  {
+//    val = input[i];
+//    output[i] = val;
+//  }
+//  return output;
+//}
+//
+//CArray rebin(CArray input, double factor)
+//{
+//  int newsize = (int) (input.size()/factor);
+//  std::valarray<Complex> output (newsize);
+//  int j = 0;
+//  int i5 = 0;
+//  for (int i = 0; i < input.size(); i++)
+//  {
+//    i5++;
+//    if (i5 == 5)
+//    {
+//      i5 = 0;
+//      j++
+//    }
+//
+//    output[j] += input[i];
+//  }
+//  return output;
+//}
+//
+//// Cooley-Tukey FFT (in-place, breadth-first, decimation-in-frequency)
+//void fft(CArray &x)
+//{
+//  // DFT
+//  unsigned int N = x.size(), k = N, n;
+//  double thetaT = 3.14159265358979323846264338328L / N;
+//  Complex phiT = Complex(cos(thetaT), -sin(thetaT)), T;
+//  while (k > 1)
+//  {
+//    n = k;
+//    k >>= 1;
+//    phiT = phiT * phiT;
+//    T = 1.0L;
+//    for (unsigned int l = 0; l < k; l++)
+//    {
+//      for (unsigned int a = l; a < N; a += n)
+//      {
+//        unsigned int b = a + k;
+//        Complex t = x[a] - x[b];
+//        x[a] += x[b];
+//        x[b] = t * T;
+//      }
+//      T *= phiT;
+//    }
+//  }
+//  // Decimate
+//  unsigned int m = (unsigned int)log2(N);
+//  for (unsigned int a = 0; a < N; a++)
+//  {
+//    unsigned int b = a;
+//    // Reverse bits
+//    b = (((b & 0xaaaaaaaa) >> 1) | ((b & 0x55555555) << 1));
+//    b = (((b & 0xcccccccc) >> 2) | ((b & 0x33333333) << 2));
+//    b = (((b & 0xf0f0f0f0) >> 4) | ((b & 0x0f0f0f0f) << 4));
+//    b = (((b & 0xff00ff00) >> 8) | ((b & 0x00ff00ff) << 8));
+//    b = ((b >> 16) | (b << 16)) >> (32 - m);
+//    if (b > a)
+//    {
+//      Complex t = x[a];
+//      x[a] = x[b];
+//      x[b] = t;
+//    }
+//  }
+//}
+                                     
 //======================================================================
 void print_channel_numbers(FILE* f, const dune::FelixFrame* frame)
 {
@@ -79,11 +165,13 @@ int main(int argc, char** argv)
 
     std::chrono::duration<double> batch_time(0);
     std::chrono::duration<double> batch_time_no_save(0);
-    int batches = nframes / 10000;
+    int batch_size = 10000;
+    int batches = nframes / batch_size;
 
     for(int batch=0; batch<nframes / 10000; ++batch){
         auto begin = std::chrono::steady_clock::now();
 
+        //--------Histogram setup--------
         // Vector with the 256 histograms
         std::vector<Hist> v;
         v.reserve(256);
@@ -91,12 +179,28 @@ int main(int argc, char** argv)
             v.push_back(Hist(100, 0, 5000));
 
         // File handle where the histos are saved for plotting later
-        std::ofstream file( "hist_" + std::to_string(batch) + ".txt" );
+        std::ofstream histfile( "hist_" + std::to_string(batch) + ".txt" );
 
+        //-------Time series setup--------
+        //Initialise 1 time series for each channel
+        const dune::FelixFrame firstframe = *frame_file.frame(batch*batch_size);
+        const dune::FelixFrame lastframe = *frame_file.frame(batch_size + batch*batch_size - 1);
+        uint64_t start_time = firstframe.timestamp();
+        uint64_t end_time = lastframe.timestamp();
 
+        std::vector<TimeSeries> ts;
+        ts.reserve(256);
+        for (int i = 0; i < 256; i++)
+        {
+          ts.push_back(TimeSeries(start_time, end_time, batch_size));
+        }
 
-        for(size_t i=batch * 10000; i<batch * 10001; ++i){
+        //File handle to save time series
+        std::ofstream timefile("timeseries_" + std::to_string(batch) + ".txt");
+
+        for(size_t i=batch * batch_size; i < (batch_size + (batch)*batch_size); ++i){
             const dune::FelixFrame* frame=frame_file.frame(i);
+
             // Print the header
             if(i==0){
                 print_channel_numbers(fout, frame);
@@ -104,10 +208,11 @@ int main(int argc, char** argv)
             // Print the ADC value for each of the 256 channels in the frame
             uint64_t timestamp=frame->timestamp();
             // fprintf(fout, "%#" PRIx64 " ", frame->timestamp());
-            for(int j=0; j<256; ++j){
+            for(int j=0; j<256; ++j)
+            {
                 // fprintf(fout, "% 6d ", frame->channel(j));
-                // std::cout << frame->channel(i) << " ";
                 v[j].Fill(frame->channel(j));
+                ts[j].Enter(frame->channel(j), timestamp);
             }
             // std::cout << std::endl;
             // fprintf(fout, "\n");
@@ -119,16 +224,32 @@ int main(int argc, char** argv)
             // }
             // prev_timestamp=timestamp;
         }
+
+        //Take Fourier transforms
+        for (int j = 0; j < 256; ++j)
+        {
+          //std::cout << "Channel " << j << std::endl;
+          ts[j].ComputeFourier(200); 
+          //std::cout << "Channel complete" << std::endl;
+        }
+
         auto t = std::chrono::steady_clock::now();
         batch_time_no_save += (t-begin);
         for(int i=0; i<256; i++)
-            v[i].Save(file);
+        {
+            v[i].Save(histfile);
+            std::cout << "Saving ts[" << i << "]" << std::endl;
+            ts[i].SaveFourier(timefile);
+            //std::cout << "Saved" << std::endl;
+        }
         auto end = std::chrono::steady_clock::now();
         batch_time += (end - begin);
         // std::cout << nbad << " bad of " << nframes << std::endl;
 
-        file.close();
+        histfile.close();
+        timefile.close();
     }
+
     auto end_main = std::chrono::steady_clock::now();
     std::cout << "Total elapsed (sec, wall time): " <<
       (std::chrono::duration_cast<std::chrono::milliseconds>(end_main-begin_main)).count() / 1000.0
